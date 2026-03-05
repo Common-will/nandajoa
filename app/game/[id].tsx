@@ -5,7 +5,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 const NEON_GREEN = '#39FF14';
 
 export default function GameScreen() {
-    const { id, n } = useLocalSearchParams<{ id: string; n: string }>();
+    const { id, count } = useLocalSearchParams<{ id: string; count: string }>();
 
     return (
         <SafeAreaView style={styles.safe}>
@@ -16,7 +16,7 @@ export default function GameScreen() {
                     <Text style={styles.gameId}>#{id}</Text>
                     <View style={styles.divider} />
                     <Text style={styles.playerCount}>
-                        <Text style={styles.countNum}>{n}</Text>
+                        <Text style={styles.countNum}>{count}</Text>
                         <Text style={styles.countSuffix}>명</Text>
                     </Text>
                 </View>
@@ -28,7 +28,7 @@ export default function GameScreen() {
                             styles.resetButton,
                             pressed && styles.resetButtonPressed,
                         ]}
-                        onPress={() => router.replace('/')}
+                        onPress={() => router.push({ pathname: '/', params: { count } })}
                     >
                         <Text style={styles.resetText}>다시 하기</Text>
                     </Pressable>

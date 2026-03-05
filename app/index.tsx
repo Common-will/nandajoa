@@ -1,146 +1,264 @@
-import React, { useState } from 'react';
-import {
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    SafeAreaView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
-} from 'react-native';
-import { router } from 'expo-router';
+import React, { useEffect, useCallback, useRef } from 'react';
+import { View, StyleSheet, useColorScheme } from 'react-native';
+import { router, useLocalSearchParams } from 'expo-router';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, {
+    useSharedValue,
+    useAnimatedStyle,
+    runOnJS,
+    withSpring,
+    useAnimatedReaction,
+    interpolate,
+    Extrapolation,
+    interpolateColor,
+    withRepeat,
+    withTiming
+} from 'react-native-reanimated';
+import * as Haptics from 'expo-haptics';
 
-const NEON_GREEN = '#39FF14';
+const FONT_SIZE = 120;
+const ITEM_HEIGHT = 120; // Explicit height for digits
+const MIN_COUNT = 2;
+const MAX_COUNT = 24;
+const SWIPE_FRICTION = 0.45;
 
-export default function HomeScreen() {
-    const [count, setCount] = useState('');
+const SPRING_CONFIG = {
+    mass: 0.8,
+    stiffness: 180,
+    damping: 25,
+};
 
-    const handleGo = () => {
-        const n = parseInt(count, 10);
+const numbers = Array.from({ length: MAX_COUNT - MIN_COUNT + 1 }, (_, i) => MIN_COUNT + i);
 
-        if (!count.trim() || isNaN(n) || n <= 1) {
-            Alert.alert('인원수 확인', '2명 이상의 인원수를 입력해 주세요.');
-            return;
-        }
+const OdometerItem = React.memo(({ index, value, scrollY, idleProgress, colors }: any) => {
+    const itemPositionY = index * ITEM_HEIGHT;
 
-        const gameId = Math.floor(Math.random() * 10) + 1;
-        router.push({ pathname: '/game/[id]', params: { id: gameId, n } });
-    };
+    const style = useAnimatedStyle(() => {
+        const distance = Math.abs(scrollY.value - itemPositionY);
+
+        const opacity = interpolate(
+            distance,
+            [0, ITEM_HEIGHT, ITEM_HEIGHT * 2],
+            [1, 0.3, 0],
+            Extrapolation.CLAMP
+        );
+
+        const baseColor = interpolateColor(
+            distance,
+            [0, ITEM_HEIGHT, ITEM_HEIGHT * 2],
+            [colors.textCenter, colors.textSub, colors.textSub]
+        );
+
+        const ultimateColor = interpolateColor(
+            idleProgress.value,
+            [0, 1],
+            [baseColor, colors.textSub]
+        );
+
+        return {
+            opacity,
+            color: ultimateColor
+        };
+    }, [colors]);
 
     return (
-        <SafeAreaView style={styles.safe}>
-            <KeyboardAvoidingView
-                style={styles.flex}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            >
-                {/* 상단 타이틀 */}
-                <View style={styles.header}>
-                    <Text style={styles.title}>몇 명인가요?</Text>
-                </View>
+        <Animated.View style={styles.item}>
+            <Animated.Text style={[styles.text, style]}>
+                {value}
+            </Animated.Text>
+        </Animated.View>
+    );
+});
 
-                {/* 중앙 입력 */}
-                <View style={styles.inputWrapper}>
-                    <TextInput
-                        style={styles.input}
-                        value={count}
-                        onChangeText={setCount}
-                        keyboardType="number-pad"
-                        placeholder="0"
-                        placeholderTextColor="#CCCCCC"
-                        maxLength={3}
-                        returnKeyType="done"
-                        onSubmitEditing={handleGo}
-                        textAlign="center"
-                    />
-                    <Text style={styles.inputLabel}>명</Text>
-                </View>
+export default function HomeScreen() {
+    // 훅의 초기값이 null일 경우 시스템 기본값으로 light를 고정
+    const colorScheme = useColorScheme() ?? 'light';
+    const isDark = colorScheme === 'dark';
 
-                {/* 하단 GO 버튼 */}
-                <View style={styles.footer}>
-                    <Pressable
-                        style={({ pressed }) => [
-                            styles.goButton,
-                            pressed && styles.goButtonPressed,
-                        ]}
-                        onPress={handleGo}
-                    >
-                        <Text style={styles.goText}>GO</Text>
-                    </Pressable>
-                </View>
-            </KeyboardAvoidingView>
-        </SafeAreaView>
+    // Theme values definition
+    const themeColors = {
+        background: isDark ? '#1D1D1F' : '#FBFBFD',
+        textCenter: isDark ? '#FBFBFD' : '#1D1D1F',
+        textSub: isDark ? '#98989D' : '#8E8E93',
+        point: isDark ? '#FF453A' : '#FF3B30'
+    };
+
+    const { count: initialCountParam } = useLocalSearchParams<{ count?: string }>();
+
+    const startCount = initialCountParam ? parseInt(initialCountParam, 10) : MIN_COUNT;
+    const initialCount = isNaN(startCount) ? MIN_COUNT : Math.min(Math.max(startCount, MIN_COUNT), MAX_COUNT);
+    const startIndex = initialCount - MIN_COUNT;
+
+    const scrollY = useSharedValue(startIndex * ITEM_HEIGHT);
+    const prevScrollY = useSharedValue(startIndex * ITEM_HEIGHT);
+
+    const lastHapticIndex = useSharedValue(startIndex);
+
+    const idleProgress = useSharedValue(0);
+    const idleTimerRaw = useRef<NodeJS.Timeout | null>(null);
+
+    const startIdleAnim = useCallback(() => {
+        idleProgress.value = withRepeat(
+            withTiming(1, { duration: 1500 }),
+            -1,
+            true
+        );
+    }, [idleProgress]);
+
+    const resetIdleTimer = useCallback(() => {
+        idleProgress.value = withTiming(0, { duration: 200 });
+        if (idleTimerRaw.current) {
+            clearTimeout(idleTimerRaw.current);
+        }
+        idleTimerRaw.current = setTimeout(() => {
+            startIdleAnim();
+        }, 10000);
+    }, [idleProgress, startIdleAnim]);
+
+    useEffect(() => {
+        resetIdleTimer();
+        return () => {
+            if (idleTimerRaw.current) clearTimeout(idleTimerRaw.current);
+        };
+    }, [resetIdleTimer]);
+
+    const handleInteraction = useCallback(() => {
+        resetIdleTimer();
+    }, [resetIdleTimer]);
+
+    const triggerSelectionHaptic = useCallback(() => {
+        Haptics.selectionAsync();
+    }, []);
+
+    const handleTap = useCallback((finalScrollY: number) => {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        const gameId = Math.floor(Math.random() * 10) + 1;
+
+        const finalIndex = Math.round(finalScrollY / ITEM_HEIGHT);
+        const clampedIndex = Math.max(0, Math.min(finalIndex, numbers.length - 1));
+        const selectedCount = numbers[clampedIndex];
+
+        router.push({ pathname: '/game/[id]', params: { id: gameId, count: selectedCount.toString() } });
+    }, []);
+
+    useAnimatedReaction(
+        () => Math.round(scrollY.value / ITEM_HEIGHT),
+        (currentIndex, prevIndex) => {
+            if (currentIndex !== prevIndex && prevIndex !== null && currentIndex !== lastHapticIndex.value) {
+                if (currentIndex >= 0 && currentIndex < numbers.length) {
+                    lastHapticIndex.value = currentIndex;
+                    runOnJS(triggerSelectionHaptic)();
+                }
+            }
+        }
+    );
+
+    const tap = Gesture.Tap()
+        .maxDuration(250)
+        .maxDistance(5)
+        .onEnd(() => {
+            runOnJS(handleTap)(scrollY.value);
+            runOnJS(handleInteraction)();
+        });
+
+    const pan = Gesture.Pan()
+        .minDistance(10)
+        .onBegin(() => {
+            runOnJS(handleInteraction)();
+            prevScrollY.value = scrollY.value;
+        })
+        .onChange((event) => {
+            let unboundedScrollY = prevScrollY.value - event.translationY * SWIPE_FRICTION;
+            const maxScroll = (numbers.length - 1) * ITEM_HEIGHT;
+
+            if (unboundedScrollY < 0) {
+                unboundedScrollY = unboundedScrollY * 0.15;
+            } else if (unboundedScrollY > maxScroll) {
+                unboundedScrollY = maxScroll + (unboundedScrollY - maxScroll) * 0.15;
+            }
+
+            scrollY.value = unboundedScrollY;
+        })
+        .onEnd((event) => {
+            const maxScroll = (numbers.length - 1) * ITEM_HEIGHT;
+            let targetIndex = Math.round((scrollY.value - event.velocityY * 0.05) / ITEM_HEIGHT);
+            targetIndex = Math.max(0, Math.min(targetIndex, numbers.length - 1));
+
+            const targetScrollY = targetIndex * ITEM_HEIGHT;
+            scrollY.value = withSpring(targetScrollY, SPRING_CONFIG);
+            lastHapticIndex.value = targetIndex;
+            runOnJS(handleInteraction)();
+        });
+
+    const composed = Gesture.Exclusive(pan, tap);
+
+    const listStyle = useAnimatedStyle(() => {
+        return {
+            transform: [{ translateY: -scrollY.value + ITEM_HEIGHT }],
+        };
+    });
+
+    return (
+        <GestureHandlerRootView style={[styles.root, { backgroundColor: themeColors.background }]}>
+            <View style={[styles.root, { backgroundColor: themeColors.background }]}>
+                <GestureDetector gesture={composed}>
+                    <View style={styles.fullscreenTouchArea}>
+                        <View style={styles.odometerWindow}>
+                            <Animated.View style={[styles.spinnerWrapper, listStyle]}>
+                                {numbers.map((val, idx) => (
+                                    <OdometerItem
+                                        key={val}
+                                        index={idx}
+                                        value={val}
+                                        scrollY={scrollY}
+                                        idleProgress={idleProgress}
+                                        colors={themeColors}
+                                    />
+                                ))}
+                            </Animated.View>
+                        </View>
+                    </View>
+                </GestureDetector>
+            </View>
+        </GestureHandlerRootView>
     );
 }
 
 const styles = StyleSheet.create({
-    safe: {
-        flex: 1,
-        backgroundColor: '#FFFFFF',
-    },
-    flex: {
+    root: {
         flex: 1,
     },
-    header: {
-        flex: 2,
-        justifyContent: 'flex-end',
-        alignItems: 'center',
-        paddingBottom: 24,
-    },
-    title: {
-        fontSize: 36,
-        fontWeight: '800',
-        color: '#111111',
-        letterSpacing: -0.5,
-    },
-    inputWrapper: {
-        flex: 3,
-        flexDirection: 'row',
+    fullscreenTouchArea: {
+        flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingHorizontal: 40,
     },
-    input: {
-        fontSize: 96,
-        fontWeight: '900',
-        color: '#111111',
-        minWidth: 140,
-        letterSpacing: -4,
-    },
-    inputLabel: {
-        fontSize: 36,
-        fontWeight: '700',
-        color: '#111111',
-        marginLeft: 8,
-        alignSelf: 'flex-end',
-        marginBottom: 16,
-    },
-    footer: {
-        flex: 2,
-        paddingHorizontal: 32,
-        paddingBottom: 32,
-        justifyContent: 'flex-end',
-    },
-    goButton: {
-        backgroundColor: NEON_GREEN,
-        borderRadius: 20,
-        paddingVertical: 28,
+    odometerWindow: {
+        height: 360,
+        width: '100%',
         alignItems: 'center',
-        shadowColor: NEON_GREEN,
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.5,
-        shadowRadius: 16,
-        elevation: 10,
+        overflow: 'hidden',
     },
-    goButtonPressed: {
-        opacity: 0.85,
-        transform: [{ scale: 0.98 }],
+    spinnerWrapper: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+        flexDirection: 'column',
     },
-    goText: {
-        fontSize: 32,
+    item: {
+        height: 120,
+        width: '100%',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    text: {
+        fontSize: FONT_SIZE,
+        lineHeight: 120,
         fontWeight: '900',
-        color: '#0A0A0A',
-        letterSpacing: 4,
+        letterSpacing: -6,
+        textAlign: 'center',
+        textAlignVertical: 'center',
     },
 });

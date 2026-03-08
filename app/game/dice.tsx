@@ -9,72 +9,73 @@ import Animated, {
     interpolate,
     Extrapolation,
 } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 
 // ─────────────────────────────────────────────────────────────
-// [1. 3중 레이어 원기둥 컵 치수 설계]
+// 컵 치수 — 5도 시야각 기준
+//  - 상단 입구: 완전한 원형 (torus 방지)
+//  - 내부 바닥: 거의 같은 크기, 최소 여백 (5도 = 거의 차이 없음)
+//  - 얇은 테두리 (6px)
 // ─────────────────────────────────────────────────────────────
-const RIM_W = 320;           // Top Layer (입구) 폭
-const RIM_H = 240;           // Top Layer (입구) 높이
-const FLOOR_W = 240;         // Bottom Layer (바닥) 폭
-const FLOOR_H = 160;         // Bottom Layer (바닥) 높이
-const FLOOR_OFFSET_Y = 22;   // 바닥을 아래로 내려서 안쪽 벽면(Middle Layer)을 투시도로 노출시킴
+const CUP_R = 135;          // 컵 반지름 (원형)
+const BORDER_W = 6;         // 얇은 테두리 두께
+const FLOOR_R = 118;        // 바닥 반지름 — CUP_R과 차이가 17px만 (5도 = 거의 같음)
+const FLOOR_DEPTH = 5;      // 바닥을 아주 살짝 내림 (5도 투시의 최소한의 표현)
 
-const FLOOR_RX = FLOOR_W / 2;
-const FLOOR_RY = FLOOR_H / 2;
-
-// [주사위]
-const DICE_SIZE = 40;
+// 주사위 (크기 유지: 24px)
+const DICE_SIZE = 48;
 const HALF = DICE_SIZE / 2;
-const DOT_SIZE = 6;
+const DOT_SIZE = 10; // 서브픽셀 렌더링 오차를 없애기 위해 짝수로 강제 (완벽한 중앙 배치)
 
 // ─────────────────────────────────────────────────────────────
-// [2. 평평한 바닥 물리 경계 (Boundary)]
+// 물리 경계 — 원형 충돌 (바닥 반지름 기준)
+// → 타원 불필요, 원형으로 단순화
 // ─────────────────────────────────────────────────────────────
-// 주사위 중심이 위치할 수 있는 한계선 (바닥 타원 반지름 - 주사위 크기 여유분)
-const DICE_OFFSET = DICE_SIZE * 0.85;
-const PHYSICS_A = FLOOR_RX - DICE_OFFSET;  // x축 충돌 경계 (≈ 120 - 34 = 86)
-const PHYSICS_B = FLOOR_RY - DICE_OFFSET;  // y축 충돌 경계 (≈ 80 - 34 = 46)
+const DICE_OFFSET = DICE_SIZE * 0.9;
+const MAX_DIST = FLOOR_R - DICE_OFFSET;   // ≈ 96
 
 const PHYSICS = {
     SHAKE_THRESHOLD: 3.0,
     IMPULSE_MULTIPLIER: 14000,
     ROT_IMPULSE_MULTIPLIER: 9000,
     FRICTION: 0.98,
+    FRICTION_SLOW: 0.82,      // 2-Zone: 느려지면 급정거
     ROT_FRICTION: 0.96,
-    BOUNCE_DAMPING: 0.68,
-    HAPTIC_SPEED_THRESHOLD: 100,
-    STOP_VELOCITY: 6,
-    STOP_ROT_VELOCITY: 25,
+    ROT_FRICTION_SLOW: 0.82,
+    SLOW_THRESHOLD: 150,
+    BOUNCE_DAMPING: 0.65,
+    HAPTIC_SPEED_THRESHOLD: 80,
+    STOP_VELOCITY: 10,
+    STOP_ROT_VELOCITY: 30,
 };
 
 // ─────────────────────────────────────────────────────────────
-// 주사위 눈(Dots) 컴포넌트
+// 주사위 눈(Dots)
 // ─────────────────────────────────────────────────────────────
 const Dot = () => <View style={styles.dot} />;
 
 const DicePips = React.memo(({ number }: { number: number }) => {
     switch (number) {
+        // [Fix] case 1: space-between + 1 child = 위로 붙음 → pipsCentered 사용
         case 1:
-            return (<View style={styles.pipContainer}><View style={styles.pipRowCenter}><Dot /></View></View>);
+            return (<View style={styles.pipsCentered}><Dot /></View>);
         case 2:
-            return (<View style={styles.pipContainer}><View style={styles.pipRowEnd}><Dot /></View><View style={styles.pipRowStart}><Dot /></View></View>);
+            return (<View style={styles.pips}><View style={styles.pE}><Dot /></View><View style={styles.pS}><Dot /></View></View>);
         case 3:
-            return (<View style={styles.pipContainer}><View style={styles.pipRowEnd}><Dot /></View><View style={styles.pipRowCenter}><Dot /></View><View style={styles.pipRowStart}><Dot /></View></View>);
+            return (<View style={styles.pips}><View style={styles.pE}><Dot /></View><View style={styles.pC}><Dot /></View><View style={styles.pS}><Dot /></View></View>);
         case 4:
-            return (<View style={styles.pipContainer}><View style={styles.pipRowSpread}><Dot /><Dot /></View><View style={styles.pipRowSpread}><Dot /><Dot /></View></View>);
+            return (<View style={styles.pips}><View style={styles.pSp}><Dot /><Dot /></View><View style={styles.pSp}><Dot /><Dot /></View></View>);
         case 5:
-            return (<View style={styles.pipContainer}><View style={styles.pipRowSpread}><Dot /><Dot /></View><View style={styles.pipRowCenter}><Dot /></View><View style={styles.pipRowSpread}><Dot /><Dot /></View></View>);
+            return (<View style={styles.pips}><View style={styles.pSp}><Dot /><Dot /></View><View style={styles.pC}><Dot /></View><View style={styles.pSp}><Dot /><Dot /></View></View>);
         case 6:
-            return (<View style={styles.pipContainer}><View style={styles.pipRowSpread}><Dot /><Dot /></View><View style={styles.pipRowSpread}><Dot /><Dot /></View><View style={styles.pipRowSpread}><Dot /><Dot /></View></View>);
+            return (<View style={styles.pips}><View style={styles.pSp}><Dot /><Dot /></View><View style={styles.pSp}><Dot /><Dot /></View><View style={styles.pSp}><Dot /><Dot /></View></View>);
         default:
             return null;
     }
 });
 
 // ─────────────────────────────────────────────────────────────
-// 3D 큐브의 단일 면 (CubeFace)
+// 3D 큐브 단일 면
 // ─────────────────────────────────────────────────────────────
 const CubeFace = React.memo(({ number, bgColor, localRotX, localRotY, rotX, rotY }: {
     number: number; bgColor: string;
@@ -84,7 +85,7 @@ const CubeFace = React.memo(({ number, bgColor, localRotX, localRotY, rotX, rotY
 }) => {
     const style = useAnimatedStyle(() => ({
         transform: [
-            { perspective: 700 },
+            { perspective: 600 },
             { rotateX: `${rotX.value}deg` },
             { rotateY: `${rotY.value}deg` },
             { rotateX: `${localRotX}deg` },
@@ -92,19 +93,11 @@ const CubeFace = React.memo(({ number, bgColor, localRotX, localRotY, rotX, rotY
             { rotateX: '90deg' },
             { translateY: HALF },
             { rotateX: '-90deg' },
-            { scale: 1.025 }, // 면 사이의 유격 제거
+            { scale: 1.04 },
         ],
     }));
-
     return (
-        <Animated.View style={[
-            styles.face,
-            {
-                backgroundColor: bgColor,
-                borderColor: bgColor,
-            },
-            style
-        ]}>
+        <Animated.View style={[styles.face, { backgroundColor: bgColor, borderColor: bgColor }, style]}>
             <DicePips number={number} />
         </Animated.View>
     );
@@ -155,7 +148,6 @@ export default function DiceScreen() {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }, []);
 
-    // ─── UI 스레드 물리 엔진 ───────────────────────────────────
     useFrameCallback((frameInfo) => {
         const dt = frameInfo.timeSincePreviousFrame;
         if (!dt) return;
@@ -163,7 +155,7 @@ export default function DiceScreen() {
 
         const accelMag = Math.sqrt(accelX.value ** 2 + accelY.value ** 2);
 
-        // A. 임펄스 (폭발 가속도)
+        // A. 폭발적 임펄스
         if (accelMag > PHYSICS.SHAKE_THRESHOLD) {
             vx.value += accelX.value * PHYSICS.IMPULSE_MULTIPLIER * s;
             vy.value += accelY.value * PHYSICS.IMPULSE_MULTIPLIER * s;
@@ -175,53 +167,39 @@ export default function DiceScreen() {
         const speed = Math.sqrt(vx.value ** 2 + vy.value ** 2);
         const rotSpeed = Math.sqrt(vRotX.value ** 2 + vRotY.value ** 2);
 
-        // B. 마찰력만으로 감쇠 (구심력 제거 = 완전한 평지)
-        vx.value *= PHYSICS.FRICTION;
-        vy.value *= PHYSICS.FRICTION;
-        vRotX.value *= PHYSICS.ROT_FRICTION;
-        vRotY.value *= PHYSICS.ROT_FRICTION;
+        // B. 2-Zone 마찰 (느릴수록 급정거)
+        const slow = speed < PHYSICS.SLOW_THRESHOLD && accelMag < PHYSICS.SHAKE_THRESHOLD;
+        vx.value *= slow ? PHYSICS.FRICTION_SLOW : PHYSICS.FRICTION;
+        vy.value *= slow ? PHYSICS.FRICTION_SLOW : PHYSICS.FRICTION;
+        vRotX.value *= slow ? PHYSICS.ROT_FRICTION_SLOW : PHYSICS.ROT_FRICTION;
+        vRotY.value *= slow ? PHYSICS.ROT_FRICTION_SLOW : PHYSICS.ROT_FRICTION;
 
         // C. 위치 통합
         x.value += vx.value * s;
         y.value += vy.value * s;
 
-        // D. [2. 바닥(Bottom Layer) 기준 엄격한 타원 충돌 판정]
-        const A = PHYSICS_A, B = PHYSICS_B;
-        if (A <= 0 || B <= 0) return; // 방어 로직
+        // D. 원형 충돌 판정 (타원→원으로 단순화)
+        const dist = Math.sqrt(x.value ** 2 + y.value ** 2);
+        if (dist > MAX_DIST) {
+            const nx = x.value / dist;
+            const ny = y.value / dist;
+            x.value = nx * MAX_DIST;
+            y.value = ny * MAX_DIST;
 
-        const ellipseEq = (x.value / A) ** 2 + (y.value / B) ** 2;
-
-        if (ellipseEq >= 1) {
-            // 벽을 뚫기 전에 바닥 안쪽으로 클리핑
-            const t = 1 / Math.sqrt(ellipseEq);
-            x.value *= t;
-            y.value *= t;
-
-            // 법선 벡터(Normal Vector)
-            const nx_raw = x.value / (A * A);
-            const ny_raw = y.value / (B * B);
-            const nLen = Math.sqrt(nx_raw ** 2 + ny_raw ** 2);
-            const nx = nx_raw / nLen;
-            const ny = ny_raw / nLen;
-
-            // 반사 내적 연산
             const dot = vx.value * nx + vy.value * ny;
-
             if (speed > PHYSICS.HAPTIC_SPEED_THRESHOLD) {
                 if (frameInfo.timestamp - lastHapticTime.value > 80) {
                     lastHapticTime.value = frameInfo.timestamp;
                     runOnJS(triggerHaptic)(Haptics.ImpactFeedbackStyle.Heavy);
                 }
             }
-
             vx.value = (vx.value - 2 * dot * nx) * PHYSICS.BOUNCE_DAMPING;
             vy.value = (vy.value - 2 * dot * ny) * PHYSICS.BOUNCE_DAMPING;
-
             vRotX.value += (Math.random() - 0.5) * 1800;
             vRotY.value += (Math.random() - 0.5) * 1800;
         }
 
-        // E. 회전 스냅 
+        // E. 회전 통합 + 스냅
         if (isRolling.value) {
             rotX.value += vRotX.value * s;
             rotY.value += vRotY.value * s;
@@ -240,39 +218,27 @@ export default function DiceScreen() {
         }
     });
 
-    const diceRootStyle = useAnimatedStyle(() => {
+    const diceStyle = useAnimatedStyle(() => {
         const speed = Math.sqrt(vx.value ** 2 + vy.value ** 2);
-        const scale = interpolate(speed, [0, 2500], [1, 1.25], Extrapolation.CLAMP);
-        return {
-            transform: [
-                { translateX: x.value },
-                { translateY: y.value },
-                { scale },
-            ],
-            // 바닥에 밀착된 얇고 무거운 그림자 (허공 탈출 금지용)
-            shadowOffset: { width: 0, height: speed > 100 ? 8 : 2 },
-            shadowRadius: speed > 100 ? 6 : 2,
-        };
+        const scale = interpolate(speed, [0, 2500], [1, 1.2], Extrapolation.CLAMP);
+        return { transform: [{ translateX: x.value }, { translateY: y.value }, { scale }] };
     });
 
     return (
-        <View style={[styles.container, { backgroundColor: isDark ? '#1D1D1F' : '#FBFBFD' }]}>
-            {/* 10도 틸트 렌즈 */}
-            <View style={styles.cameraWrapper}>
+        <View style={[styles.screen, { backgroundColor: isDark ? '#1D1D1F' : '#FBFBFD' }]}>
 
-                {/* [1] Top Layer: 컵 테두리(Rim) 및 전체 그림자 */}
-                <View style={styles.cupRim}>
+            {/* 외부 드롭 섀도우 */}
+            <View style={styles.cupShadow}>
 
-                    {/* [1] Middle Layer: 내부 벽면(Wall)을 표현하는 짙은 배경 */}
-                    <LinearGradient
-                        colors={['rgba(0,0,0,0.85)', 'rgba(0,0,0,0.1)']}
-                        style={StyleSheet.absoluteFillObject}
-                        pointerEvents="none"
-                    />
+                {/* 컵 외벽 — 단순한 원형. 두꺼운 테두리 제거 (torus 현상 해결) */}
+                <View style={styles.cupWall}>
 
-                    {/* [1] Bottom Layer: 평평한 바닥면(Floor) */}
+                    {/* 내부 바닥면 — 거의 같은 크기, 아주 살짝 아래 (5도 투시 표현) */}
+                    {/* [문제 3 해결] rimFrontOverlay 및 분리된 그라데이션 레이어 완전 제거
+                        → 단일 배경색으로 통일하여 밝기 경계선 완전 제거 */}
                     <View style={styles.cupFloor}>
-                        <Animated.View style={[styles.diceContainer, diceRootStyle]}>
+
+                        <Animated.View style={[styles.diceContainer, diceStyle]}>
                             <CubeFace number={1} bgColor="#FFFFFF" localRotX={0} localRotY={0} rotX={rotX} rotY={rotY} />
                             <CubeFace number={6} bgColor="#F0F0F5" localRotX={0} localRotY={180} rotX={rotX} rotY={rotY} />
                             <CubeFace number={3} bgColor="#E0E0E8" localRotX={0} localRotY={90} rotX={rotX} rotY={rotY} />
@@ -281,75 +247,64 @@ export default function DiceScreen() {
                             <CubeFace number={5} bgColor="#D0D0D8" localRotX={-90} localRotY={0} rotX={rotX} rotY={rotY} />
                         </Animated.View>
                     </View>
-                </View>
 
+                </View>
             </View>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
-    container: {
+    screen: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    cameraWrapper: {
-        transform: [
-            { perspective: 800 },
-            { rotateX: '15deg' },
-        ],
+    cupShadow: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 16 },
+        shadowOpacity: 0.4,
+        shadowRadius: 24,
+        elevation: 14,
     },
-    // Top Layer (컵 테두리)
-    cupRim: {
-        width: RIM_W,
-        height: RIM_H,
-        borderRadius: 9999, // 완벽한 타원화
-        backgroundColor: '#8B0000', // 배경이 그대로 가운데 벽 역할을 함
-        borderWidth: 12,
-        borderColor: '#FF5040',
+    // 컵 외벽: 완전한 원형, 얇은 테두리(6px) → torus 현상 없음
+    cupWall: {
+        width: CUP_R * 2,
+        height: CUP_R * 2,
+        borderRadius: CUP_R,
+        backgroundColor: '#A01010',   // 벽면 색상 (입구 림보다 어두움)
+        borderWidth: BORDER_W,
+        borderColor: '#FF4A3D',       // 얇은 빨간 테두리 (실제 컵 림)
         justifyContent: 'center',
         alignItems: 'center',
-        overflow: 'hidden', // 삐져나가는 그림자와 바닥을 잘라내어 벽면 깊이감을 생성
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 26 },
-        shadowOpacity: 0.5,
-        shadowRadius: 36,
-        elevation: 18,
+        overflow: 'hidden',
     },
-    // Bottom Layer (평평한 바닥)
+    // 바닥면: 원형, CUP_R과 차이 적음(5도 투시), FLOOR_DEPTH만큼 살짝 내려감
     cupFloor: {
         position: 'absolute',
-        width: FLOOR_W,
-        height: FLOOR_H,
-        borderRadius: 9999, // 바닥도 타원
-        backgroundColor: '#D62828', // 벽(#8B0000)보다 훨씬 밝아야 바닥임이 인식됨
-        // Y축으로 내려 앞쪽 벽은 짧게, 뒤쪽 벽은 길게 보이도록 3D 원기둥 투시 연출!
-        transform: [{ translateY: FLOOR_OFFSET_Y }],
+        width: FLOOR_R * 2,
+        height: FLOOR_R * 2,
+        borderRadius: FLOOR_R,
+        backgroundColor: '#CC2020',
+        transform: [{ translateY: FLOOR_DEPTH }],
         justifyContent: 'center',
         alignItems: 'center',
-        // 바닥 가장자리 어두운 그림자 (벽면과 닿는 모서리 음영)
-        borderWidth: 2,
-        borderColor: 'rgba(0,0,0,0.1)',
     },
     diceContainer: {
         width: DICE_SIZE,
         height: DICE_SIZE,
         justifyContent: 'center',
         alignItems: 'center',
-        shadowColor: '#000',
-        shadowOpacity: 0.5,
     },
     face: {
         position: 'absolute',
         width: DICE_SIZE,
         height: DICE_SIZE,
-        borderRadius: 0, // 완전 날카로운 정육면체
+        borderRadius: 4,
         backfaceVisibility: 'hidden',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 4,
-        borderWidth: 0.75, // 이음새 밀봉
+        borderWidth: 0.5,
+        // 내부 정렬 및 여백은 pips 컨테이너에게 완전히 위임하여
+        // 컨테이너 크기 오버플로우나 밀림 현상 방지
     },
     dot: {
         width: DOT_SIZE,
@@ -357,13 +312,15 @@ const styles = StyleSheet.create({
         borderRadius: DOT_SIZE / 2,
         backgroundColor: '#1D1D1F',
     },
-    pipContainer: {
-        flex: 1, width: '100%',
-        paddingHorizontal: 3, paddingVertical: 3,
-        justifyContent: 'space-between',
-    },
-    pipRowCenter: { width: '100%', flexDirection: 'row', justifyContent: 'center' },
-    pipRowStart: { width: '100%', flexDirection: 'row', justifyContent: 'flex-start' },
-    pipRowEnd: { width: '100%', flexDirection: 'row', justifyContent: 'flex-end' },
-    pipRowSpread: { width: '100%', flexDirection: 'row', justifyContent: 'space-between' },
+    // 기본 pip 컨테이너 (2, 3, 4, 5, 6용)
+    pips: { flex: 1, width: '100%', padding: 8, justifyContent: 'space-between' },
+    // 1번 전용: 단일 점 완전 중앙 정렬
+    pipsCentered: { flex: 1, width: '100%', justifyContent: 'center', alignItems: 'center' },
+    // 각 행 스타일 (폭을 전체로 잡고 안에서 배치)
+    pC: { width: '100%', flexDirection: 'row', justifyContent: 'center' },
+    pS: { width: '100%', flexDirection: 'row', justifyContent: 'flex-start' },
+    pE: { width: '100%', flexDirection: 'row', justifyContent: 'flex-end' },
+    pSp: { width: '100%', flexDirection: 'row', justifyContent: 'space-between' },
 });
+
+

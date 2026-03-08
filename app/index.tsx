@@ -70,7 +70,7 @@ const OdometerItem = React.memo(({ index, value, scrollY, idleProgress, colors }
     );
 });
 
-export default function HomeScreen() {
+function HomeScreen() {
     // 훅의 초기값이 null일 경우 시스템 기본값으로 light를 고정
     const colorScheme = useColorScheme() ?? 'light';
     const isDark = colorScheme === 'dark';
@@ -132,13 +132,16 @@ export default function HomeScreen() {
 
     const handleTap = useCallback((finalScrollY: number) => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        const gameId = Math.floor(Math.random() * 10) + 1;
 
         const finalIndex = Math.round(finalScrollY / ITEM_HEIGHT);
         const clampedIndex = Math.max(0, Math.min(finalIndex, numbers.length - 1));
-        const selectedCount = numbers[clampedIndex];
+        const currentCount = numbers[clampedIndex];
 
-        router.push({ pathname: '/game/[id]', params: { id: gameId, count: selectedCount.toString() } });
+        // 추후 추가될 수 있는 미니게임 라우트 배열
+        const GAMES = ['/game/dice'];
+        const selectedGame = GAMES[Math.floor(Math.random() * GAMES.length)];
+
+        router.push({ pathname: selectedGame as any, params: { count: currentCount.toString() } });
     }, []);
 
     useAnimatedReaction(
@@ -180,10 +183,14 @@ export default function HomeScreen() {
             scrollY.value = unboundedScrollY;
         })
         .onEnd((event) => {
-            const maxScroll = (numbers.length - 1) * ITEM_HEIGHT;
-            let targetIndex = Math.round((scrollY.value - event.velocityY * 0.05) / ITEM_HEIGHT);
+            // 스크롤 방향(Y축 역전)에 맞춘 속도감 있는 관성(Inertia) 적용
+            const targetPosition = scrollY.value - (event.velocityY * 0.2);
+            let targetIndex = Math.round(targetPosition / ITEM_HEIGHT);
+
+            // 범위를 벗어나지 않도록 인덱스 clamp
             targetIndex = Math.max(0, Math.min(targetIndex, numbers.length - 1));
 
+            // 가장 가까운 아이템으로 스냅
             const targetScrollY = targetIndex * ITEM_HEIGHT;
             scrollY.value = withSpring(targetScrollY, SPRING_CONFIG);
             lastHapticIndex.value = targetIndex;
@@ -262,3 +269,5 @@ const styles = StyleSheet.create({
         textAlignVertical: 'center',
     },
 });
+
+export default HomeScreen;
